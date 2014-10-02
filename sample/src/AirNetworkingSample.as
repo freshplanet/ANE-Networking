@@ -21,15 +21,14 @@ package
 			super();
 			
 			// Test GET
-			var data: Object = {}; // <-- INSERT YOUR DATA HERE
 			var request: URLRequest = new URLRequest(""); // <-- INSERT YOUR URL HERE
 			request.method = URLRequestMethod.GET;
 			
 			// Test POST
-//			var data: Object = {}; // <-- INSERT YOUR DATA HERE
-//			var request: URLRequest = new URLRequest(""); // <-- INSERT YOUR URL HERE
+//			var request: URLRequest = new URLRequest(); // <-- INSERT YOUR URL HERE
 //			request.method = URLRequestMethod.POST;
 //			request.data = new URLVariables();
+//			var data: Object = {}; // <-- INSERT YOUR DATA HERE
 //			for (var key: String in data) { request.data[key] = data[key]; }
 			
 			as3Loader.addEventListener(Event.COMPLETE, function(event: Event): void {

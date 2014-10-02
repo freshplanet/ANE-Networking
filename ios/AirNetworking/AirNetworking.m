@@ -23,18 +23,18 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Connection delegate
 
-@interface AirNetworkingConnectionDelegate : NSObject <NSURLConnectionDataDelegate>
+@interface AirNetworkingSessionDelegate : NSObject <NSURLSessionTaskDelegate, NSURLSessionDataDelegate>
 
 @property (nonatomic, readonly) FREContext context;
-@property (nonatomic, strong) NSURLConnection *connection;
-@property (nonatomic, readonly) NSURLResponse *response;
+@property (nonatomic, strong) NSURLSession *session;
+@property (nonatomic, strong) NSURLSessionTask *task;
 @property (nonatomic, readonly) NSMutableData *data;
 @property (nonatomic, readonly) NSError *error;
 
 @end
 
 
-@implementation AirNetworkingConnectionDelegate
+@implementation AirNetworkingSessionDelegate
 
 - (id)initWithContext:(FREContext)context
 {
@@ -47,26 +47,25 @@
     return self;
 }
 
-- (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSURLResponse *)response
-{
-    _response = response;
-}
-
-- (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data
 {
     [_data appendData:data];
     FPANE_DispatchEvent(self.context, @"PROGRESS");
 }
 
-- (void)connectionDidFinishLoading:(NSURLConnection *)connection
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error
 {
-    FPANE_DispatchEvent(self.context, @"COMPLETE");
-}
+    if (error) {
 
-- (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
-{
-    _error = error;
-    FPANE_DispatchEvent(self.context, @"ERROR");
+        _error = error;
+        FPANE_DispatchEvent(self.context, @"ERROR");
+    }
+    else {
+
+        FPANE_DispatchEvent(self.context, @"COMPLETE");
+    }
+
+    [session flushWithCompletionHandler:^{}];
 }
 
 @end
@@ -75,11 +74,11 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Utils
 
-AirNetworkingConnectionDelegate *connectionDelegateFromContext(FREContext context)
+AirNetworkingSessionDelegate *sessionDelegateFromContext(FREContext context)
 {
-    CFTypeRef connectionDelegateRef;
-    FREGetContextNativeData(context, (void *)&connectionDelegateRef);
-    return (__bridge AirNetworkingConnectionDelegate *)connectionDelegateRef;
+    CFTypeRef sessionDelegateRef;
+    FREGetContextNativeData(context, (void *)&sessionDelegateRef);
+    return (__bridge AirNetworkingSessionDelegate *)sessionDelegateRef;
 }
 
 
@@ -102,10 +101,16 @@ DEFINE_ANE_FUNCTION(AirNetworking_load)
         request.HTTPBody = [FPANE_FREObjectToNSString(argv[2]) dataUsingEncoding:NSUTF8StringEncoding];
     }
 
-    AirNetworkingConnectionDelegate *connectionDelegate = connectionDelegateFromContext(context);
+    AirNetworkingSessionDelegate *sessionDelegate = sessionDelegateFromContext(context);
 
-    NSURLConnection *connection = [NSURLConnection connectionWithRequest:request delegate:connectionDelegate];
-    connectionDelegate.connection = connection;
+    NSURLSessionConfiguration *sessionConfig = [NSURLSessionConfiguration defaultSessionConfiguration];
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:sessionConfig delegate:sessionDelegate delegateQueue:nil];
+    sessionDelegate.session = session;
+
+    NSURLSessionTask *task = [session dataTaskWithRequest:request];
+    sessionDelegate.task = task;
+
+    [task resume];
 
     return nil;
 }
@@ -116,9 +121,9 @@ DEFINE_ANE_FUNCTION(AirNetworking_load)
 
 DEFINE_ANE_FUNCTION(AirNetworking_close)
 {
-    AirNetworkingConnectionDelegate *connectionDelegate = connectionDelegateFromContext(context);
+    AirNetworkingSessionDelegate *sessionDelegate = sessionDelegateFromContext(context);
 
-    [connectionDelegate.connection cancel];
+    [sessionDelegate.session invalidateAndCancel];
 
     return nil;
 }
@@ -129,9 +134,9 @@ DEFINE_ANE_FUNCTION(AirNetworking_close)
 
 DEFINE_ANE_FUNCTION(AirNetworking_getBytesLoaded)
 {
-    AirNetworkingConnectionDelegate *connectionDelegate = connectionDelegateFromContext(context);
+    AirNetworkingSessionDelegate *sessionDelegate = sessionDelegateFromContext(context);
 
-    return FPANE_IntToFREObject(connectionDelegate.data.length);
+    return FPANE_IntToFREObject((NSUInteger)sessionDelegate.task.countOfBytesReceived);
 }
 
 
@@ -140,9 +145,9 @@ DEFINE_ANE_FUNCTION(AirNetworking_getBytesLoaded)
 
 DEFINE_ANE_FUNCTION(AirNetworking_getBytesTotal)
 {
-    AirNetworkingConnectionDelegate *connectionDelegate = connectionDelegateFromContext(context);
+    AirNetworkingSessionDelegate *sessionDelegate = sessionDelegateFromContext(context);
 
-    return FPANE_IntToFREObject((NSUInteger)connectionDelegate.response.expectedContentLength);
+    return FPANE_IntToFREObject((NSUInteger)sessionDelegate.task.countOfBytesExpectedToReceive);
 }
 
 
@@ -151,9 +156,9 @@ DEFINE_ANE_FUNCTION(AirNetworking_getBytesTotal)
 
 DEFINE_ANE_FUNCTION(AirNetworking_getData)
 {
-    AirNetworkingConnectionDelegate *connectionDelegate = connectionDelegateFromContext(context);
+    AirNetworkingSessionDelegate *sessionDelegate = sessionDelegateFromContext(context);
 
-    return FPANE_NSStringToFREObject([[NSString alloc] initWithData:connectionDelegate.data encoding:NSUTF8StringEncoding]);
+    return FPANE_NSStringToFREObject([[NSString alloc] initWithData:sessionDelegate.data encoding:NSUTF8StringEncoding]);
 }
 
 
@@ -162,11 +167,11 @@ DEFINE_ANE_FUNCTION(AirNetworking_getData)
 
 DEFINE_ANE_FUNCTION(AirNetworking_getError)
 {
-    AirNetworkingConnectionDelegate *connectionDelegate = connectionDelegateFromContext(context);
+    AirNetworkingSessionDelegate *sessionDelegate = sessionDelegateFromContext(context);
 
     FREObject error;
-    FREObject errorMessage = FPANE_NSStringToFREObject(connectionDelegate.error.localizedDescription);
-    FREObject errorID = FPANE_IntToFREObject(connectionDelegate.error.code);
+    FREObject errorMessage = FPANE_NSStringToFREObject(sessionDelegate.error.localizedDescription);
+    FREObject errorID = FPANE_IntToFREObject(sessionDelegate.error.code);
     FREObject args[] = {errorMessage, errorID};
 
     FRENewObject((const uint8_t *)"Error", 2, args, &error, NULL);
@@ -191,15 +196,15 @@ void AirNetworkingContextInitializer(void* extData, const uint8_t* ctxType, FREC
     *numFunctionsToTest = sizeof(functions) / sizeof(FRENamedFunction);
     *functionsToSet = functions;
 
-    AirNetworkingConnectionDelegate *connectionDelegate = [[AirNetworkingConnectionDelegate alloc] initWithContext: ctx];
-    FRESetContextNativeData(ctx, (void *)CFBridgingRetain(connectionDelegate));
+    AirNetworkingSessionDelegate *sessionDelegate = [[AirNetworkingSessionDelegate alloc] initWithContext: ctx];
+    FRESetContextNativeData(ctx, (void *)CFBridgingRetain(sessionDelegate));
 }
 
 void AirNetworkingContextFinalizer(FREContext ctx)
 {
-    CFTypeRef connectionDelegateRef;
-    FREGetContextNativeData(ctx, (void **)&connectionDelegateRef);
-    CFBridgingRelease(connectionDelegateRef);
+    CFTypeRef sessionDelegateRef;
+    FREGetContextNativeData(ctx, (void **)&sessionDelegateRef);
+    CFBridgingRelease(sessionDelegateRef);
 }
 
 
